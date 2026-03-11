@@ -1,0 +1,58 @@
+## .NET / C# ##
+
+# Build outputs
+bin/
+obj/
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Visual Studio
+.vs/
+*.rsuser
+
+# Rider / JetBrains
+.idea/
+*.sln.iml
+
+# VS Code
+.vscode/
+
+# Publish profiles
+PublishProfiles/
+**/Properties/PublishProfiles/
+
+# Roslyn cache
+*.temp.cs
+*.cache
+
+# Test results
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+
+# Logs
+*.log
+logs/
+
+## Project-specific ##
+
+# Local appsettings with secrets — use appsettings.example.json as reference
+appsettings.json
+
+# Generated release summaries
+*.md
+!README.md

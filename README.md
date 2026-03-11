@@ -62,8 +62,9 @@ The generated Markdown file will be written to the path you confirm.
 
 1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens**
 2. Click **Generate new token**
-3. Grant **Read-only** access to **Repository contents** (for private repos) or no extra scopes (for public repos)
-4. Copy the token into `appsettings.json`
+3. Select the appropriate "Resource owner"
+4. Grant **Read-only** access to **Repository contents** (for private repos) or no extra scopes (for public repos)
+5. Copy the token into `appsettings.json`
 
 ## Output Format
 

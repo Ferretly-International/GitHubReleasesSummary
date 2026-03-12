@@ -123,14 +123,6 @@ await AnsiConsole.Status()
 
             ctx.Status($"Found [green]{releases.Count}[/] release(s) in range.");
 
-            foreach (var release in releases)
-            {
-                releasesProcessed++;
-                var body = !string.IsNullOrWhiteSpace(release.Body)
-                    ? StripContributorsSections(release.Body)
-                    : null;
-                processedReleases.Add((release, body));
-            }
         }
         catch (AuthorizationException)
         {
@@ -140,6 +132,63 @@ await AnsiConsole.Status()
         catch (NotFoundException)
         {
             AnsiConsole.MarkupLine($"[red]Repository not found:[/] {owner}/{repo}");
+            throw;
+        }
+
+        // Phase 2: strip and optionally filter release bodies
+        var prLabelCache = new Dictionary<int, IReadOnlyList<Label>>();
+        var knownIssues = new HashSet<int>();
+        int prCheckedCount = 0;
+
+        Regex? urlPattern = null;
+        Regex? shortRefPattern = null;
+        if (labelFilter != null)
+        {
+            urlPattern = new Regex(
+                $@"https://github\.com/{Regex.Escape(owner)}/{Regex.Escape(repo)}/pull/(\d+)",
+                RegexOptions.IgnoreCase | RegexOptions.Compiled);
+            shortRefPattern = new Regex(@"(?<!\w)#(\d+)(?!\w)", RegexOptions.Compiled);
+            ctx.Status("Checking PR labels... (0 refs checked)");
+        }
+
+        try
+        {
+            foreach (var release in releases)
+            {
+                releasesProcessed++;
+                string? body = !string.IsNullOrWhiteSpace(release.Body)
+                    ? StripContributorsSections(release.Body)
+                    : null;
+
+                if (labelFilter != null && body != null)
+                {
+                    var (filteredBody, include) = await FilterBodyByLabelAsync(
+                        body, owner, repo, labelFilter,
+                        github, prLabelCache, knownIssues,
+                        urlPattern!, shortRefPattern!,
+                        () =>
+                        {
+                            prCheckedCount++;
+                            ctx.Status($"Checking PR labels... ({prCheckedCount} refs checked)");
+                        });
+
+                    if (!include) { labelFilterRemovedReleases = true; continue; }
+                    body = filteredBody;
+                }
+
+                processedReleases.Add((release, body));
+            }
+        }
+        catch (AuthorizationException)
+        {
+            AnsiConsole.MarkupLine("[red]Authorization failed during PR label lookup.[/] " +
+                "Your token may lack pull request read permission (check fine-grained token scopes).");
+            throw;
+        }
+        catch (RateLimitExceededException)
+        {
+            AnsiConsole.MarkupLine($"[red]GitHub rate limit exceeded[/] after processing " +
+                $"[yellow]{releasesProcessed}[/] of {releases.Count} release(s). No output file was written.");
             throw;
         }
     });

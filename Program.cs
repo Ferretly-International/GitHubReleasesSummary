@@ -88,6 +88,12 @@ var outputPath = AnsiConsole.Prompt(
             }
         }));
 
+// Prompt for label filter (optional)
+var labelFilterInput = AnsiConsole.Prompt(
+    new TextPrompt<string>("[green]Label filter[/] [grey](leave blank to include all PRs)[/]:")
+        .AllowEmpty());
+var labelFilter = string.IsNullOrWhiteSpace(labelFilterInput) ? null : labelFilterInput.Trim();
+
 AnsiConsole.WriteLine();
 
 // Fetch releases

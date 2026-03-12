@@ -7,6 +7,7 @@ A .NET 8 console application that fetches GitHub releases for a repository withi
 - Interactive ANSI console UI powered by [Spectre.Console](https://spectreconsole.net/)
 - Fetches releases via the GitHub API using [Octokit.net](https://github.com/octokit/octokit.net)
 - Filters releases by a user-supplied date range
+- Optional label filter: limits each release to only lines referencing PRs that carry a specific GitHub label; releases with no matching PRs are omitted
 - Strips `## New Contributors`, `## Contributors`, and `**Full Changelog**` footers from each release body
 - Outputs a clean, single Markdown file with a table-of-contents-friendly heading per release
 - Optional GitHub Personal Access Token for private repos and higher API rate limits
@@ -55,16 +56,21 @@ You will be prompted for:
 | Start date | `2024-01-01` |
 | End date | `2024-12-31` |
 | Output file path | _(pre-filled, press Enter to accept)_ |
+| Label filter | `Release Notes` _(leave blank to include all PRs)_ |
 
-The generated Markdown file will be written to the path you confirm.
+The generated Markdown file will be written to the path you confirm. The label filter is optional — pressing Enter without typing skips filtering entirely.
 
 ## Creating a GitHub Personal Access Token
 
 1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens**
 2. Click **Generate new token**
 3. Select the appropriate "Resource owner"
-4. Grant **Read-only** access to **Repository contents** (for private repos) or no extra scopes (for public repos)
+4. Under **Repository permissions**, grant:
+   - **Contents** — Read-only (required for private repos; not needed for public repos)
+   - **Pull requests** — Read-only (required when using the label filter)
 5. Copy the token into `appsettings.json`
+
+> **Note:** Classic PATs with the `repo` scope also work. If you see an "Access denied" error during label lookup, your fine-grained token is missing the **Pull requests** read permission.
 
 ## Output Format
 

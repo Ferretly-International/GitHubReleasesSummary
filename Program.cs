@@ -88,10 +88,19 @@ var outputPath = AnsiConsole.Prompt(
             }
         }));
 
+// Prompt for label filter (optional)
+var labelFilterInput = AnsiConsole.Prompt(
+    new TextPrompt<string>("[green]Label filter[/] [grey](leave blank to include all PRs)[/]:")
+        .AllowEmpty());
+var labelFilter = string.IsNullOrWhiteSpace(labelFilterInput) ? null : labelFilterInput.Trim();
+
 AnsiConsole.WriteLine();
 
-// Fetch releases
+// Fetch releases and process bodies
 IReadOnlyList<Release> releases = [];
+List<(Release release, string? body)> processedReleases = [];
+int releasesProcessed = 0;         // count of releases the Phase 2 loop has visited
+bool labelFilterRemovedReleases = false; // true if at least one release was omitted by the label filter
 
 await AnsiConsole.Status()
     .Spinner(Spinner.Known.Dots)
@@ -113,6 +122,7 @@ await AnsiConsole.Status()
                 .ToList();
 
             ctx.Status($"Found [green]{releases.Count}[/] release(s) in range.");
+
         }
         catch (AuthorizationException)
         {
@@ -124,15 +134,76 @@ await AnsiConsole.Status()
             AnsiConsole.MarkupLine($"[red]Repository not found:[/] {owner}/{repo}");
             throw;
         }
+
+        // Phase 2: strip and optionally filter release bodies
+        var prLabelCache = new Dictionary<int, IReadOnlyList<Label>>();
+        var knownIssues = new HashSet<int>();
+        int prCheckedCount = 0;
+
+        Regex? urlPattern = null;
+        Regex? shortRefPattern = null;
+        if (labelFilter != null)
+        {
+            urlPattern = new Regex(
+                $@"https://github\.com/{Regex.Escape(owner)}/{Regex.Escape(repo)}/pull/(\d+)",
+                RegexOptions.IgnoreCase | RegexOptions.Compiled);
+            shortRefPattern = new Regex(@"(?<!\w)#(\d+)(?!\w)", RegexOptions.Compiled);
+            ctx.Status("Checking PR labels... (0 refs checked)");
+        }
+
+        try
+        {
+            foreach (var release in releases)
+            {
+                releasesProcessed++;
+                string? body = !string.IsNullOrWhiteSpace(release.Body)
+                    ? StripContributorsSections(release.Body)
+                    : null;
+
+                if (labelFilter != null && body != null)
+                {
+                    var (filteredBody, include) = await FilterBodyByLabelAsync(
+                        body, owner, repo, labelFilter,
+                        github, prLabelCache, knownIssues,
+                        urlPattern!, shortRefPattern!,
+                        () =>
+                        {
+                            prCheckedCount++;
+                            ctx.Status($"Checking PR labels... ({prCheckedCount} refs checked)");
+                        });
+
+                    if (!include) { labelFilterRemovedReleases = true; continue; }
+                    body = filteredBody;
+                }
+
+                processedReleases.Add((release, body));
+            }
+        }
+        catch (AuthorizationException)
+        {
+            // Catches both AuthorizationException (401) and ForbiddenException (403)
+            AnsiConsole.MarkupLine("[red]Authorization failed during PR label lookup.[/] " +
+                "Your token may lack pull request read permission (check fine-grained token scopes).");
+            throw;
+        }
+        catch (RateLimitExceededException)
+        {
+            AnsiConsole.MarkupLine($"[red]GitHub rate limit exceeded[/] after processing " +
+                $"[yellow]{releasesProcessed}[/] of {releases.Count} release(s). No output file was written.");
+            throw;
+        }
     });
 
-if (releases.Count == 0)
+if (processedReleases.Count == 0)
 {
-    AnsiConsole.MarkupLine($"[yellow]No releases found between {startDate} and {endDate}.[/]");
+    var reason = labelFilterRemovedReleases
+        ? $"[yellow]No releases matched the label filter \"{Markup.Escape(labelFilter!)}\".[/]"
+        : $"[yellow]No releases found between {startDate} and {endDate}.[/]";
+    AnsiConsole.MarkupLine(reason);
     return;
 }
 
-AnsiConsole.MarkupLine($"Found [green]{releases.Count}[/] release(s). Generating markdown...");
+AnsiConsole.MarkupLine($"Found [green]{processedReleases.Count}[/] release(s). Generating markdown...");
 AnsiConsole.WriteLine();
 
 // Build markdown
@@ -141,12 +212,12 @@ sb.AppendLine($"# {owner}/{repo} — Release Notes");
 sb.AppendLine();
 sb.AppendLine($"> Generated: {DateTime.Now:yyyy-MM-dd HH:mm}  ");
 sb.AppendLine($"> Period: {startDate} to {endDate}  ");
-sb.AppendLine($"> Releases: {releases.Count}");
+sb.AppendLine($"> Releases: {processedReleases.Count}");
 sb.AppendLine();
 sb.AppendLine("---");
 sb.AppendLine();
 
-foreach (var release in releases)
+foreach (var (release, releaseBody) in processedReleases)
 {
     var publishedOn = release.PublishedAt?.LocalDateTime.ToString("yyyy-MM-dd") ?? "unknown";
     var tagLabel = release.TagName;
@@ -158,14 +229,10 @@ foreach (var release in releases)
                   (release.Prerelease ? " | **Pre-release**" : ""));
     sb.AppendLine();
 
-    if (!string.IsNullOrWhiteSpace(release.Body))
+    if (!string.IsNullOrWhiteSpace(releaseBody))
     {
-        var body = StripContributorsSections(release.Body);
-        if (!string.IsNullOrWhiteSpace(body))
-        {
-            sb.AppendLine(body.Trim());
-            sb.AppendLine();
-        }
+        sb.AppendLine(releaseBody.Trim());
+        sb.AppendLine();
     }
     else
     {
@@ -219,4 +286,129 @@ static string StripContributorsSections(string body)
     body = Regex.Replace(body, @"(\r?\n){3,}", "\n\n");
 
     return body;
+}
+
+/// <summary>
+/// Extracts all distinct PR numbers referenced on a single line.
+/// Checks the full GitHub pull URL pattern first, then the short #NNN pattern.
+/// Returns an empty set if no PR references are found.
+/// </summary>
+static HashSet<int> ExtractPrNumbers(string line, Regex urlPattern, Regex shortRefPattern)
+{
+    var numbers = new HashSet<int>();
+
+    foreach (Match m in urlPattern.Matches(line))
+        numbers.Add(int.Parse(m.Groups[1].Value));
+
+    foreach (Match m in shortRefPattern.Matches(line))
+        numbers.Add(int.Parse(m.Groups[1].Value));
+
+    return numbers;
+}
+
+/// <summary>
+/// Filters a release body to only PR lines whose PRs carry the specified label.
+/// Non-PR lines always pass through. Returns (filteredBody, include):
+///   include=false  → release should be omitted
+///   include=true   → release should be included (filteredBody may be null/empty)
+/// </summary>
+static async Task<(string? filteredBody, bool include)> FilterBodyByLabelAsync(
+    string body,
+    string owner,
+    string repo,
+    string labelFilter,
+    GitHubClient github,
+    Dictionary<int, IReadOnlyList<Label>> prLabelCache,
+    HashSet<int> knownIssues,
+    Regex urlPattern,
+    Regex shortRefPattern,
+    Action onApiCall)
+{
+    var lines = body.Replace("\r\n", "\n").Split('\n');
+    var resultLines = new List<string>();
+    bool hadTruePrLines = false;
+    bool anyMatched = false;
+
+    foreach (var line in lines)
+    {
+        var prNumbers = ExtractPrNumbers(line, urlPattern, shortRefPattern);
+
+        if (prNumbers.Count == 0)
+        {
+            // Non-PR line — always keep
+            resultLines.Add(line);
+            continue;
+        }
+
+        // Resolve labels for each PR number on this line
+        bool hasAnyTruePr = false;
+        bool lineMatched = false;
+
+        foreach (var prNum in prNumbers)
+        {
+            if (knownIssues.Contains(prNum))
+                continue; // already confirmed to be an issue, skip
+
+            if (!prLabelCache.TryGetValue(prNum, out var labels))
+            {
+                try
+                {
+                    var pr = await github.PullRequest.Get(owner, repo, prNum);
+                    labels = pr.Labels;
+                    prLabelCache[prNum] = labels;
+                    onApiCall();
+                }
+                catch (NotFoundException)
+                {
+                    // Reference is an issue, not a PR
+                    knownIssues.Add(prNum);
+                    onApiCall();
+                    continue;
+                }
+                // AuthorizationException, RateLimitExceededException, and all
+                // other exceptions propagate to the caller as fatal errors.
+            }
+
+            hasAnyTruePr = true;
+            if (labels.Any(l => l.Name.Equals(labelFilter, StringComparison.OrdinalIgnoreCase)))
+                lineMatched = true;
+        }
+
+        if (!hasAnyTruePr)
+        {
+            // All refs on this line were issues — reclassify as non-PR line, keep it
+            resultLines.Add(line);
+            continue;
+        }
+
+        // True PR line
+        hadTruePrLines = true;
+        if (lineMatched)
+        {
+            anyMatched = true;
+            resultLines.Add(line);
+        }
+        // else: drop the line (PR line that didn't match the label)
+    }
+
+    // Determine include/omit before post-processing
+    if (hadTruePrLines && !anyMatched)
+        return (null, false); // true PR lines existed but none matched → omit
+
+    // Post-process: collapse consecutive blank lines to max 1, trim leading/trailing blanks
+    var collapsed = new List<string>();
+    bool lastWasBlank = false;
+    foreach (var l in resultLines)
+    {
+        bool isBlank = string.IsNullOrWhiteSpace(l);
+        if (isBlank && lastWasBlank) continue; // skip consecutive blank
+        collapsed.Add(l);
+        lastWasBlank = isBlank;
+    }
+    var joined = string.Join("\n", collapsed).Trim();
+
+    if (hadTruePrLines && string.IsNullOrWhiteSpace(joined))
+        return (null, false); // filtered body is entirely blank → omit
+
+    return (string.IsNullOrWhiteSpace(joined) ? null : joined, true);
 }

@@ -56,3 +56,4 @@ appsettings.json
 # Generated release summaries
 *.md
 !README.md
+!docs/**/*.md

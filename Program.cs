@@ -196,7 +196,7 @@ await AnsiConsole.Status()
 if (processedReleases.Count == 0)
 {
     var reason = labelFilterRemovedReleases
-        ? $"[yellow]No releases matched the label filter \"{labelFilter}\".[/]"
+        ? $"[yellow]No releases matched the label filter \"{Markup.Escape(labelFilter!)}\".[/]"
         : $"[yellow]No releases found between {startDate} and {endDate}.[/]";
     AnsiConsole.MarkupLine(reason);
     return;

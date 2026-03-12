@@ -237,3 +237,21 @@ static string StripContributorsSections(string body)
 
     return body;
 }
+
+/// <summary>
+/// Extracts all distinct PR numbers referenced on a single line.
+/// Checks the full GitHub pull URL pattern first, then the short #NNN pattern.
+/// Returns an empty set if no PR references are found.
+/// </summary>
+static HashSet<int> ExtractPrNumbers(string line, Regex urlPattern, Regex shortRefPattern)
+{
+    var numbers = new HashSet<int>();
+
+    foreach (Match m in urlPattern.Matches(line))
+        numbers.Add(int.Parse(m.Groups[1].Value));
+
+    foreach (Match m in shortRefPattern.Matches(line))
+        numbers.Add(int.Parse(m.Groups[1].Value));
+
+    return numbers;
+}

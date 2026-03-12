@@ -181,6 +181,7 @@ await AnsiConsole.Status()
         }
         catch (AuthorizationException)
         {
+            // Catches both AuthorizationException (401) and ForbiddenException (403)
             AnsiConsole.MarkupLine("[red]Authorization failed during PR label lookup.[/] " +
                 "Your token may lack pull request read permission (check fine-grained token scopes).");
             throw;

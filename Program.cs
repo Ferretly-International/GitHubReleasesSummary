@@ -255,3 +255,110 @@ static HashSet<int> ExtractPrNumbers(string line, Regex urlPattern, Regex shortR
 
     return numbers;
 }
+
+/// <summary>
+/// Filters a release body to only PR lines whose PRs carry the specified label.
+/// Non-PR lines always pass through. Returns (filteredBody, include):
+///   include=false  → release should be omitted
+///   include=true   → release should be included (filteredBody may be null/empty)
+/// </summary>
+static async Task<(string? filteredBody, bool include)> FilterBodyByLabelAsync(
+    string body,
+    string owner,
+    string repo,
+    string labelFilter,
+    GitHubClient github,
+    Dictionary<int, IReadOnlyList<Label>> prLabelCache,
+    HashSet<int> knownIssues,
+    Regex urlPattern,
+    Regex shortRefPattern,
+    Action onApiCall)
+{
+    var lines = body.Replace("\r\n", "\n").Split('\n');
+    var resultLines = new List<string>();
+    bool hadTruePrLines = false;
+    bool anyMatched = false;
+
+    foreach (var line in lines)
+    {
+        var prNumbers = ExtractPrNumbers(line, urlPattern, shortRefPattern);
+
+        if (prNumbers.Count == 0)
+        {
+            // Non-PR line — always keep
+            resultLines.Add(line);
+            continue;
+        }
+
+        // Resolve labels for each PR number on this line
+        bool hasAnyTruePr = false;
+        bool lineMatched = false;
+
+        foreach (var prNum in prNumbers)
+        {
+            if (knownIssues.Contains(prNum))
+                continue; // already confirmed to be an issue, skip
+
+            if (!prLabelCache.TryGetValue(prNum, out var labels))
+            {
+                try
+                {
+                    var pr = await github.PullRequest.Get(owner, repo, prNum);
+                    labels = pr.Labels;
+                    prLabelCache[prNum] = labels;
+                    onApiCall();
+                }
+                catch (NotFoundException)
+                {
+                    // Reference is an issue, not a PR
+                    knownIssues.Add(prNum);
+                    onApiCall();
+                    continue;
+                }
+                // AuthorizationException, RateLimitExceededException, and all
+                // other exceptions propagate to the caller as fatal errors.
+            }
+
+            hasAnyTruePr = true;
+            if (labels.Any(l => l.Name.Equals(labelFilter, StringComparison.OrdinalIgnoreCase)))
+                lineMatched = true;
+        }
+
+        if (!hasAnyTruePr)
+        {
+            // All refs on this line were issues — reclassify as non-PR line, keep it
+            resultLines.Add(line);
+            continue;
+        }
+
+        // True PR line
+        hadTruePrLines = true;
+        if (lineMatched)
+        {
+            anyMatched = true;
+            resultLines.Add(line);
+        }
+        // else: drop the line (PR line that didn't match the label)
+    }
+
+    // Determine include/omit before post-processing
+    if (hadTruePrLines && !anyMatched)
+        return (null, false); // true PR lines existed but none matched → omit
+
+    // Post-process: collapse consecutive blank lines to max 1, trim leading/trailing blanks
+    var collapsed = new List<string>();
+    bool lastWasBlank = false;
+    foreach (var l in resultLines)
+    {
+        bool isBlank = string.IsNullOrWhiteSpace(l);
+        if (isBlank && lastWasBlank) continue; // skip consecutive blank
+        collapsed.Add(l);
+        lastWasBlank = isBlank;
+    }
+    var joined = string.Join("\n", collapsed).Trim();
+
+    if (hadTruePrLines && string.IsNullOrWhiteSpace(joined))
+        return (null, false); // filtered body is entirely blank → omit
+
+    return (string.IsNullOrWhiteSpace(joined) ? null : joined, true);
+}

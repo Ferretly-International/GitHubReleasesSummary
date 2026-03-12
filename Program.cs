@@ -96,8 +96,11 @@ var labelFilter = string.IsNullOrWhiteSpace(labelFilterInput) ? null : labelFilt
 
 AnsiConsole.WriteLine();
 
-// Fetch releases
+// Fetch releases and process bodies
 IReadOnlyList<Release> releases = [];
+List<(Release release, string? body)> processedReleases = [];
+int releasesProcessed = 0;         // count of releases the Phase 2 loop has visited
+bool labelFilterRemovedReleases = false; // true if at least one release was omitted by the label filter
 
 await AnsiConsole.Status()
     .Spinner(Spinner.Known.Dots)
@@ -119,6 +122,15 @@ await AnsiConsole.Status()
                 .ToList();
 
             ctx.Status($"Found [green]{releases.Count}[/] release(s) in range.");
+
+            foreach (var release in releases)
+            {
+                releasesProcessed++;
+                var body = !string.IsNullOrWhiteSpace(release.Body)
+                    ? StripContributorsSections(release.Body)
+                    : null;
+                processedReleases.Add((release, body));
+            }
         }
         catch (AuthorizationException)
         {
@@ -132,13 +144,16 @@ await AnsiConsole.Status()
         }
     });
 
-if (releases.Count == 0)
+if (processedReleases.Count == 0)
 {
-    AnsiConsole.MarkupLine($"[yellow]No releases found between {startDate} and {endDate}.[/]");
+    var reason = labelFilterRemovedReleases
+        ? $"[yellow]No releases matched the label filter \"{labelFilter}\".[/]"
+        : $"[yellow]No releases found between {startDate} and {endDate}.[/]";
+    AnsiConsole.MarkupLine(reason);
     return;
 }
 
-AnsiConsole.MarkupLine($"Found [green]{releases.Count}[/] release(s). Generating markdown...");
+AnsiConsole.MarkupLine($"Found [green]{processedReleases.Count}[/] release(s). Generating markdown...");
 AnsiConsole.WriteLine();
 
 // Build markdown
@@ -147,12 +162,12 @@ sb.AppendLine($"# {owner}/{repo} — Release Notes");
 sb.AppendLine();
 sb.AppendLine($"> Generated: {DateTime.Now:yyyy-MM-dd HH:mm}  ");
 sb.AppendLine($"> Period: {startDate} to {endDate}  ");
-sb.AppendLine($"> Releases: {releases.Count}");
+sb.AppendLine($"> Releases: {processedReleases.Count}");
 sb.AppendLine();
 sb.AppendLine("---");
 sb.AppendLine();
 
-foreach (var release in releases)
+foreach (var (release, releaseBody) in processedReleases)
 {
     var publishedOn = release.PublishedAt?.LocalDateTime.ToString("yyyy-MM-dd") ?? "unknown";
     var tagLabel = release.TagName;
@@ -164,14 +179,10 @@ foreach (var release in releases)
                   (release.Prerelease ? " | **Pre-release**" : ""));
     sb.AppendLine();
 
-    if (!string.IsNullOrWhiteSpace(release.Body))
+    if (!string.IsNullOrWhiteSpace(releaseBody))
     {
-        var body = StripContributorsSections(release.Body);
-        if (!string.IsNullOrWhiteSpace(body))
-        {
-            sb.AppendLine(body.Trim());
-            sb.AppendLine();
-        }
+        sb.AppendLine(releaseBody.Trim());
+        sb.AppendLine();
     }
     else
     {

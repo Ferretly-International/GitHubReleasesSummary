@@ -63,6 +63,12 @@ var rangeStart = DateTime.ParseExact(startDate.Trim(), "yyyy-MM-dd",
 var rangeEnd = DateTime.ParseExact(endDate.Trim(), "yyyy-MM-dd",
     System.Globalization.CultureInfo.InvariantCulture).AddDays(1).AddTicks(-1);
 
+// Prompt for label filter (optional)
+var labelFilterInput = AnsiConsole.Prompt(
+    new TextPrompt<string>("[green]Label filter[/] [grey](leave blank to include all PRs)[/]:")
+        .AllowEmpty());
+var labelFilter = string.IsNullOrWhiteSpace(labelFilterInput) ? null : labelFilterInput.Trim();
+
 // Prompt for output path
 var defaultFileName = $"{owner}-{repo}-releases-{startDate}-to-{endDate}.md"
     .Replace('/', '-');
@@ -87,12 +93,6 @@ var outputPath = AnsiConsole.Prompt(
                 return ValidationResult.Error("[red]Invalid file path[/]");
             }
         }));
-
-// Prompt for label filter (optional)
-var labelFilterInput = AnsiConsole.Prompt(
-    new TextPrompt<string>("[green]Label filter[/] [grey](leave blank to include all PRs)[/]:")
-        .AllowEmpty());
-var labelFilter = string.IsNullOrWhiteSpace(labelFilterInput) ? null : labelFilterInput.Trim();
 
 AnsiConsole.WriteLine();
 

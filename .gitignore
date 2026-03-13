@@ -57,3 +57,5 @@ appsettings.json
 *.md
 !README.md
 !docs/**/*.md
+
+.claude/settings.local.json
